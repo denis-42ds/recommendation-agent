@@ -1,0 +1,13 @@
+HANDOFF — фиксация подготовительного этапа
+| Пункт | Результат |
+| :--- | :--- |
+| Task | Зафиксировать подготовку инфраструктуры и решения MVP |
+| Status | DONE — документация подготовлена |
+| Files | README.md, docs/architecture.md, docs/requirements.md, docs/STATE.md |
+| Decisions | Streamlit, JSON, Python rules/scoring, Cloud Run |
+| Tests | Не применимо — код ещё не создан |
+| Risks | Ограничение времени 48 часов |
+| Open questions | Структура данных и бизнес-правила |
+| Next actions | Локальная настройка Python и создание приложения |
+| STATE.md update Содержимое подготовлено |
+| Handoff destination 02 — Implementation & Deployment |
