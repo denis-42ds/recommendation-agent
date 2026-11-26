@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+recommendation_agent.egg-info/
 
 # Python
 __pycache__/
@@ -33,4 +34,4 @@ data/processed/*
 *.sqlite3
 
 # Docs
-docs/
+source-materials/

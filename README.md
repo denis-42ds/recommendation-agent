@@ -1,92 +1,105 @@
 # Recommendation Agent
 
-AI-powered personalized recommendation agent for B2B e-commerce.
+MVP рекомендательной системы для личного кабинета B2B интернет-магазина.
 
-**Hackathon:** ИИкузница — Софтлайн Решения  
-**Track:** ИИ агент рекомендаций в личном кабинете  
-**Status:** Prototype in development
+## Назначение
 
-## Overview
+Система формирует персонализированные рекомендации трёх типов:
 
-Recommendation Agent is a prototype of an intelligent recommendation system for a B2B e-commerce personal account.
+- Cross-sell — дополняющие товары и услуги.
+- Up-sell — расширенные или более подходящие решения.
+- Renewal — продление лицензий и подписок.
 
-The system analyzes customer context, purchase history, active licenses and available product information to generate personalized recommendations.
+## Текущий статус
 
-The primary business scenarios are:
+Проект находится на этапе локальной разработки.
 
-- **Cross-sell:** recommend complementary products and services.
-- **Up-sell:** recommend more advanced products or configurations.
-- **Renewal:** identify opportunities for license and subscription renewal.
+- [x] Подготовка Google Cloud
+- [x] Выбор региона Cloud Run: `asia-southeast3`
+- [ ] Локальная среда Python
+- [ ] Демонстрационные данные
+- [ ] Recommendation Engine
+- [ ] Streamlit UI
+- [ ] Тесты
+- [ ] Docker
+- [ ] Деплой в Cloud Run
+- [ ] Проверка публичного демо
 
-The solution combines a recommendation engine, business rules and AI-powered orchestration.
+## Технологии
 
-## Key Objectives
+- Python 3.11+
+- Streamlit
+- JSON
+- pytest
+- Docker
+- Google Cloud Run
 
-- Increase relevance of product recommendations.
-- Identify cross-sell and up-sell opportunities.
-- Improve customer retention and repeat purchases.
-- Provide transparent explanations for recommendations.
-- Keep recommendation generation measurable and cost-efficient.
+LLM — опциональный компонент для улучшения текстовых объяснений рекомендаций.
 
-## Architecture
+## Локальный запуск
 
-The planned architecture consists of:
+Инструкция будет дополнена после создания приложения.
 
-- API layer — application interface.
-- Agent — workflow orchestration and tool execution.
-- Recommendation Engine — candidate generation and ranking.
-- Business Rules — validation and filtering.
-- LLM Integration — context interpretation and recommendation explanations.
-- Data Layer — customer, purchase, license and product information.
+Предполагаемый запуск:
 
-See [Architecture Overview](docs/architecture/overview.md).
+```bash
+python3 -m venv .venv
+```
 
-## Technology Stack
+Активация окружения:
 
-Initial technology choices:
+Linux/macOS:
 
-- Python
-- FastAPI
-- Pydantic
-- Docker / Docker Compose
-- LLM provider — TBD
-- Database — TBD
+```bash
+source .venv/bin/activate
+```
 
-## Project Structure
+Windows PowerShell:
 
-See the repository directory tree and documentation.
+```powershell
+.venv\Scripts\Activate.ps1
+```
 
-## Getting Started
+Установка зависимостей:
 
-Local setup instructions will be added as the application implementation progresses.
+```bash
+python -m pip install -e ".[dev]"
+```
 
-## Configuration
+Запуск:
 
-Copy `.env.example` to `.env` and configure the required environment variables.
+```bash
+streamlit run app.py
+```
 
-Never commit API keys, passwords or other secrets.
+## Архитектура
 
-## Development
+Одно Streamlit-приложение, Python-модуль рекомендаций и JSON-файлы с демонстрационными данными.
 
-Development guidelines, testing and deployment instructions will be documented here.
+Основной поток:
 
-## Demo
+```text
+Context
+  -> Candidate Generation
+  -> Business Filtering
+  -> Ranking
+  -> Explanation
+  -> Recommendations
+```
 
-A public demo environment will be available during the hackathon evaluation period.
+## Документация
 
-## Documentation
+- `docs/STATE.md` — актуальный статус проекта.
+- `docs/requirements.md` — требования MVP.
+- `docs/architecture.md` — архитектура и принятые технические решения.
 
-- [Architecture](docs/architecture/overview.md)
-- [Assumptions and Requirements](docs/requirements/assumptions.md)
-- [Architecture Decisions](docs/decisions/)
-- [Demo Scenario](docs/demo/demo-script.md)
-- [Cost Estimation](docs/economics/cost-estimation.md)
-- [Project State](STATE.md)
+## Данные
 
-## Disclaimer
+Для демонстрации используются синтетические данные. Реальные клиентские данные не добавлять без разрешения.
 
-This repository contains a hackathon prototype. All synthetic data must be clearly identified as synthetic. External datasets, models and services are subject to their respective licenses and terms.
+## Развёртывание
 
-## License
+Целевая платформа — Google Cloud Run, регион `asia-southeast3`.
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE).
+Подготовка Docker и инструкция по деплою будут добавлены после проверки локальной версии.
+
