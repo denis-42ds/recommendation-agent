@@ -23,7 +23,7 @@
 | Google Cloud | CONFIRMED BY USER | Пользователь подтвердил корректную настройку gcloud |
 | Cloud Run region | CONFIRMED BY USER | `asia-southeast3` (Bangkok) |
 | Cloud Run deployment | NOT STARTED | Разворачивать после локальной проверки приложения |
-| Локальная среда | NOT STARTED | Следующий этап |
+| Локальная среда | CONFIRMED BY USER | Локальная среда активирована |
 | Recommendation logic | NOT STARTED | Правила и scoring |
 | UI | NOT STARTED | Streamlit |
 | Тесты | NOT STARTED | Добавлять вместе с логикой |
@@ -147,3 +147,12 @@ Recommendation Engine
 
 Статусы DONE и CONFIRMED использовать только при наличии соответствующего результата или подтверждения пользователя.
 
+## 10. История статусов
+
+- baseline реализован и локально рассчитан;
+- размеры когорт совпали с официальными;
+- Popularity воспроизводит официальные результаты;
+- зафиксированы локальные результаты Co-purchase;
+- локальные проверки ruff check и git diff --check пройдены по сообщению пользователя;
+- следующий этап — Product Graph;
+- граф ещё не реализован.
