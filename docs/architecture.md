@@ -28,25 +28,30 @@ FastAPI на первом этапе не требуется. Его можно 
 
 ```text
 recommendation-agent/
-├── app.py
-├── recommender.py
-├── data/
-│   ├── customers.json
-│   ├── products.json
-│   └── purchases.json
+├── src/
+│   └── recommendation_agent/
+│       ├── __init__.py
+│       ├── data_loader.py       # Чтение и подготовка Excel
+│       ├── baselines.py         # Популярность и co-purchase
+│       ├── recommender.py       # Алгоритмы рекомендаций
+│       ├── evaluation.py        # Precision@3, Fill Rate, группы A/B
+│       └── graph.py             # Граф товарных связей
+├── scripts/
+│   ├── inspect_data.py
+│   └── run_backtest.py
 ├── tests/
-│   └── test_recommender.py
-├── requirements.txt
-├── Dockerfile
-├── .gitignore
-├── README.md
-├── STATE.md
-└── docs/
-    ├── requirements.md
-    └── architecture.md
+│   ├── test_data_loader.py
+│   ├── test_baselines.py
+│   └── test_evaluation.py
+├── artifacts/                   # Результаты экспериментов
+├── docs/
+│   ├── source-materials/        # Исходные материалы, не коммитить
+│   ├── architecture.md
+│   ├── requirements.md
+│   └── STATE.md
+├── pyproject.toml
+└── README.md
 ```
-
-Это целевая структура, а не подтверждение существования файлов.
 
 ## 4. Поток обработки
 

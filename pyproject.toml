@@ -9,6 +9,9 @@ description = "AI-powered personalized recommendation agent"
 requires-python = ">=3.11"
 dependencies = [
     "streamlit>=1.40",
+    "pandas",
+    "openpyxl",
+    "matplotlib",
 ]
 
 [project.optional-dependencies]
