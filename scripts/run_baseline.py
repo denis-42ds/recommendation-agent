@@ -9,8 +9,14 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 TRAIN_END = pd.Timestamp("2026-08-31")
-TEST_START = pd.Timestamp("2026-09-07")
 TOP_K = 3
+
+OFFICIAL_PRECISION = {
+    ("A", "ALL", "popularity"): 0.0544,
+    ("A", "ALL", "co_purchase"): 0.0564,
+    ("B", "ALL", "popularity"): 0.0736,
+    ("B", "ALL", "co_purchase"): 0.0601,
+}
 
 REQUIRED_SALES_COLUMNS = {
     "order_id",
@@ -22,21 +28,6 @@ REQUIRED_SALES_COLUMNS = {
 REQUIRED_CLIENT_COLUMNS = {
     "client_id",
     "client_group",
-}
-
-OFFICIAL_PRECISION = {
-    ("A", "ALL", "popularity"): 0.052,
-    ("A", "B2B", "popularity"): 0.036,
-    ("A", "B2C", "popularity"): 0.194,
-    ("B", "ALL", "popularity"): 0.070,
-    ("B", "B2B", "popularity"): 0.051,
-    ("B", "B2C", "popularity"): 0.192,
-    ("A", "ALL", "co_purchase"): 0.048,
-    ("A", "B2B", "co_purchase"): 0.039,
-    ("A", "B2C", "co_purchase"): 0.130,
-    ("B", "ALL", "co_purchase"): 0.051,
-    ("B", "B2B", "co_purchase"): 0.038,
-    ("B", "B2C", "co_purchase"): 0.128,
 }
 
 
@@ -87,9 +78,9 @@ def load_data(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
 def split_train_test(
     sales: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Apply the date split defined in the organizer protocol."""
+    """Apply the organizer's v4 date split."""
     train = sales[sales["order_week"] <= TRAIN_END].copy()
-    test = sales[sales["order_week"] >= TEST_START].copy()
+    test = sales[sales["order_week"] > TRAIN_END].copy()
 
     if train.empty:
         raise ValueError("Train пустой. Проверьте формат order_week.")
@@ -163,49 +154,47 @@ def build_cohort(
     return pd.concat([cohort, cold_start], ignore_index=True)
 
 
-def build_popularity_ranking(train: pd.DataFrame) -> list[str]:
+def build_popularity_ranking(
+    train: pd.DataFrame,
+) -> tuple[list[str], dict[str, int]]:
     """
-    Rank products by the number of distinct orders containing each product.
+    Rank products by the number of distinct clients who bought them.
 
-    A product is counted no more than once per order.
-    Ties are resolved by item_id in ascending lexical order.
+    Each client contributes at most one count per item.
     """
-    order_items = train[["order_id", "item_id"]].drop_duplicates()
+    client_items = train[["client_id", "item_id"]].drop_duplicates()
 
-    counts = order_items.groupby("item_id")["order_id"].nunique()
-
-    ranking = (
-        counts.rename("order_count")
-        .reset_index()
-        .sort_values(
-            ["order_count", "item_id"],
-            ascending=[False, True],
-            kind="stable",
-        )
+    counts = (
+        client_items.groupby("item_id")["client_id"]
+        .nunique()
+        .to_dict()
     )
 
-    return ranking["item_id"].tolist()
+    ranking = sorted(
+        counts,
+        key=lambda item: (-counts[item], item),
+    )
+
+    return ranking, counts
 
 
 def build_item_cooccurrence(
     train: pd.DataFrame,
 ) -> dict[str, Counter[str]]:
     """
-    Build an undirected item-item graph from products in the same order.
+    Build an undirected item-item graph from composite baskets.
 
-    Each unordered pair contributes one count per order.
+    Basket identity is (order_id, order_week).
+    Each unordered item pair contributes once per basket.
     """
-    order_items = (
-        train.groupby("order_id")["item_id"]
+    basket_items = (
+        train.groupby(["order_id", "order_week"])["item_id"]
         .apply(lambda values: sorted(set(values)))
     )
 
     graph: dict[str, Counter[str]] = defaultdict(Counter)
 
-    for items in order_items:
-        if len(items) < 2:
-            continue
-
+    for items in basket_items:
         for item_a, item_b in combinations(items, 2):
             graph[item_a][item_b] += 1
             graph[item_b][item_a] += 1
@@ -215,37 +204,52 @@ def build_item_cooccurrence(
 
 def recommend_popularity(
     history: set[str],
-    ranking: list[str],
+    popularity_counts: dict[str, int],
     k: int = TOP_K,
 ) -> list[str]:
-    """Recommend globally popular products not present in client history."""
-    return [item for item in ranking if item not in history][:k]
+    """Recommend unseen products ranked by popularity."""
+    candidates = [
+        item for item in popularity_counts
+        if item not in history
+    ]
+
+    candidates.sort(
+        key=lambda item: (-popularity_counts[item], item)
+    )
+
+    return candidates[:k]
 
 
 def recommend_co_purchase(
     history: set[str],
     graph: dict[str, Counter[str]],
+    popularity_counts: dict[str, int],
     k: int = TOP_K,
 ) -> list[str]:
     """
-    Rank products by summed co-occurrence with the client's history.
+    Rank unseen products by summed co-purchase score.
 
-    This is a simple, deterministic baseline, not the final recommendation
-    algorithm. Products already present in history are excluded.
+    Tie-breaks: higher popularity, then ascending item_id.
     """
     scores: Counter[str] = Counter()
 
     for history_item in history:
-        for candidate, count in graph.get(history_item, {}).items():
-            if candidate not in history:
-                scores[candidate] += count
+        scores.update(graph.get(history_item, {}))
 
-    ranked = sorted(
-        scores.items(),
-        key=lambda pair: (-pair[1], pair[0]),
+    candidates = [
+        item for item in scores
+        if item not in history
+    ]
+
+    candidates.sort(
+        key=lambda item: (
+            -scores[item],
+            -popularity_counts.get(item, 0),
+            item,
+        )
     )
 
-    return [item for item, _ in ranked[:k]]
+    return candidates[:k]
 
 
 def evaluate_predictions(
@@ -254,6 +258,7 @@ def evaluate_predictions(
     targets: dict[str, set[str]],
     popularity_ranking: list[str],
     cooccurrence_graph: dict[str, Counter[str]],
+    popularity_counts: dict[str, int],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Calculate per-client predictions and aggregate metrics."""
     prediction_rows = []
@@ -264,9 +269,13 @@ def evaluate_predictions(
         target_items = targets[client_id]
 
         methods = {
-            "popularity": recommend_popularity(history, popularity_ranking),
-            "co_purchase": recommend_co_purchase(history, cooccurrence_graph),
-        }
+                "popularity": recommend_popularity(history, popularity_counts,),
+                "co_purchase": recommend_co_purchase(
+                    history,
+                    cooccurrence_graph,
+                    popularity_counts,
+                    ),
+                }
 
         for method, recommendations in methods.items():
             hits = len(set(recommendations[:TOP_K]) & target_items)
@@ -393,20 +402,28 @@ def plot_metric(
 
         if metric == "precision_at_3":
             official_values = [
-                OFFICIAL_PRECISION[(cohort_name, segment, "popularity")]
+                OFFICIAL_PRECISION.get(
+                    (cohort_name, segment, "popularity"),
+                    0.0,
+                )
                 for segment in segments
             ]
+
             official_bars = axis.bar(
                 [x + width for x in x_positions],
                 official_values,
                 width,
-                label="Organizer baseline",
+                label="Organizer Popularity",
                 hatch="//",
                 fill=False,
             )
+
             axis.bar_label(
                 official_bars,
-                labels=[f"{value:.1%}" for value in official_values],
+                labels=[
+                    f"{value:.2%}" if value > 0 else ""
+                    for value in official_values
+                ],
                 padding=3,
                 fontsize=8,
             )
@@ -461,7 +478,7 @@ def main() -> None:
     parser.add_argument(
         "--input",
         type=Path,
-        default=Path("docs/source-materials/Датасет_Рекомендации_ЛК_v3.xlsx"),
+        default=Path("docs/source-materials/Датасет_Рекомендации_ЛК_v4.xlsx"),
         help="Path to the organizer Excel workbook.",
     )
     parser.add_argument(
@@ -484,7 +501,7 @@ def main() -> None:
     targets = build_test_targets(test, histories)
     cohort = build_cohort(histories, targets, clients)
 
-    popularity_ranking = build_popularity_ranking(train)
+    popularity_ranking, popularity_counts = build_popularity_ranking(train)
     cooccurrence_graph = build_item_cooccurrence(train)
 
     predictions, metrics = evaluate_predictions(
@@ -493,6 +510,7 @@ def main() -> None:
         targets=targets,
         popularity_ranking=popularity_ranking,
         cooccurrence_graph=cooccurrence_graph,
+        popularity_counts=popularity_counts,
     )
 
     sizes = save_cohort_sizes(cohort, args.output)

@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import argparse
@@ -16,8 +15,8 @@ REQUIRED_SALES_COLUMNS = {
     "item_id",
 }
 
-NODE_COLUMNS = ["item_id", "order_count"]
-EDGE_COLUMNS = ["item_id_a", "item_id_b", "order_count"]
+NODE_COLUMNS = ["item_id", "basket_count"]
+EDGE_COLUMNS = ["item_id_a", "item_id_b", "basket_count"]
 
 
 def normalize_id(series: pd.Series) -> pd.Series:
@@ -77,11 +76,11 @@ def build_product_graph(
     train: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Build graph nodes and undirected weighted edges from training orders.
+    Build graph nodes and undirected weighted edges from training baskets.
 
-    Each product is counted once per order.
-    Each unordered product pair contributes one edge count per order.
-    Products appearing in only one-product orders remain isolated nodes.
+    Basket identity is (order_id, order_week).
+    Each product is counted once per basket.
+    Products appearing in single-product baskets remain isolated nodes.
     """
     missing = REQUIRED_SALES_COLUMNS - set(train.columns)
     if missing:
@@ -89,41 +88,43 @@ def build_product_graph(
             f"В данных отсутствуют колонки: {sorted(missing)}"
         )
 
-    # Deduplicate product occurrences within each order.
-    order_items = train[["order_id", "item_id"]].drop_duplicates()
-
-    node_counts = (
-        order_items.groupby("item_id")["order_id"]
-        .nunique()
-        .rename("order_count")
-        .reset_index()
-        .sort_values("item_id", kind="stable")
-        .reset_index(drop=True)
-    )
-
-    edge_counts: dict[tuple[str, str], int] = {}
-
-    grouped_orders = (
-        order_items.groupby("order_id")["item_id"]
+    basket_items = (
+        train[["order_id", "order_week", "item_id"]]
+        .drop_duplicates()
+        .groupby(["order_id", "order_week"])["item_id"]
         .apply(lambda values: sorted(set(values)))
     )
 
-    for items in grouped_orders:
+    node_counts: dict[str, int] = {}
+    edge_counts: dict[tuple[str, str], int] = {}
+
+    for items in basket_items:
+        for item in items:
+            node_counts[item] = node_counts.get(item, 0) + 1
+
         for item_a, item_b in combinations(items, 2):
             pair = (item_a, item_b)
             edge_counts[pair] = edge_counts.get(pair, 0) + 1
 
-    edge_rows = [
-        {
-            "item_id_a": item_a,
-            "item_id_b": item_b,
-            "order_count": count,
-        }
-        for (item_a, item_b), count in sorted(edge_counts.items())
-    ]
+    nodes = pd.DataFrame(
+        [
+            {"item_id": item, "basket_count": count}
+            for item, count in sorted(node_counts.items())
+        ],
+        columns=NODE_COLUMNS,
+    )
 
-    nodes = node_counts[NODE_COLUMNS].copy()
-    edges = pd.DataFrame(edge_rows, columns=EDGE_COLUMNS)
+    edges = pd.DataFrame(
+        [
+            {
+                "item_id_a": item_a,
+                "item_id_b": item_b,
+                "basket_count": count,
+            }
+            for (item_a, item_b), count in sorted(edge_counts.items())
+        ],
+        columns=EDGE_COLUMNS,
+    )
 
     return nodes, edges
 
@@ -151,25 +152,28 @@ def export_product_graph(
     )
 
     graph = {
-        "schema_version": 1,
+        "schema_version": 2,
         "metadata": {
             "train_period_end": TRAIN_END.date().isoformat(),
             "directed": False,
+            "basket_key": ["order_id", "order_week"],
             "node_count": len(nodes),
             "edge_count": len(edges),
             "node_definition": (
-                "One node per distinct item_id present in training sales."
+                "One node per distinct item_id present in training sales. "
+                "basket_count is the number of unique training baskets "
+                "containing the item."
             ),
             "edge_definition": (
                 "An undirected edge exists when two distinct products "
-                "appear in the same order. Weight is the number of "
-                "unique orders containing the pair."
+                "appear in the same training basket. basket_count is "
+                "the number of unique baskets containing the pair."
             ),
         },
         "nodes": [
             {
                 "item_id": str(row.item_id),
-                "order_count": int(row.order_count),
+                "basket_count": int(row.basket_count),
             }
             for row in nodes.itertuples(index=False)
         ],
@@ -177,7 +181,7 @@ def export_product_graph(
             {
                 "item_id_a": str(row.item_id_a),
                 "item_id_b": str(row.item_id_b),
-                "order_count": int(row.order_count),
+                "basket_count": int(row.basket_count),
             }
             for row in edges.itertuples(index=False)
         ],
@@ -204,7 +208,7 @@ def main() -> None:
         "--input",
         type=Path,
         default=Path(
-            "docs/source-materials/Датасет_Рекомендации_ЛК_v3.xlsx"
+            "docs/source-materials/Датасет_Рекомендации_ЛК_v4.xlsx"
         ),
         help="Path to the organizer Excel workbook.",
     )
@@ -232,4 +236,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
