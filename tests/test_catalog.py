@@ -282,6 +282,27 @@ def test_build_catalog_maps_multiple_offers_for_same_sku(
     assert report["matched_item_count"] == 1
     assert report["multi_offer_item_count"] == 1
 
+    matched_products = json.loads(
+        (output_dir / "matched_products.json").read_text(encoding="utf-8")
+    )
+
+    assert len(matched_products) == 2
+    assert {
+        product["offer_id"] for product in matched_products
+    } == {"231539", "332767"}
+
+    assert all(
+        product["item_id"] == "ITEM-1"
+        for product in matched_products
+    )
+
+    assert all(
+        product["available"] is True
+        for product in matched_products
+    )
+
+    assert report["matched_offer_count"] == 2
+
 
 def test_build_catalog_matches_exact_url_article_53063(
     tmp_path: Path,

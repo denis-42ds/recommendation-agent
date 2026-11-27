@@ -311,15 +311,25 @@ def build_catalog(
     methods: Counter[str] = Counter()
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    products_path = output_dir / "products.json"
-    temporary_products_path = products_path.with_suffix(".json.part")
 
-    print("Streaming YML offers and writing products.json...")
+    products_path = output_dir / "products.json"
+    matched_products_path = output_dir / "matched_products.json"
+
+    temporary_products_path = products_path.with_suffix(".json.part")
+    temporary_matched_path = matched_products_path.with_suffix(".json.part")
+
+    print("Streaming YML offers and writing catalog files...")
+
     offer_count = 0
+    matched_offer_count = 0
 
     try:
-        with temporary_products_path.open("w", encoding="utf-8") as output:
+        with (
+            temporary_products_path.open("w", encoding="utf-8") as output,
+            temporary_matched_path.open("w", encoding="utf-8") as matched_output,
+        ):
             output.write("[\n")
+            matched_output.write("[\n")
 
             for product in iter_feed(feed_path):
                 if offer_count:
@@ -362,16 +372,37 @@ def build_catalog(
                         method = "exact_name" if matched_item_ids else ""
 
                 for item_id in matched_item_ids:
+                    # Avoid duplicate item_id + offer_id records.
+                    is_new_offer = offer_id not in candidates[item_id]
                     candidates[item_id][offer_id] = method
 
-            # Закрываем JSON-массив только после успешного завершения цикла.
-            output.write("\n]\n")
+                    if not is_new_offer:
+                        continue
 
-        # Публикуем только полностью записанный файл.
+                    if matched_offer_count:
+                        matched_output.write(",\n")
+
+                    matched_record = {
+                        "item_id": item_id,
+                        **product,
+                    }
+
+                    matched_output.write(
+                        json.dumps(matched_record, ensure_ascii=False)
+                    )
+                    matched_offer_count += 1
+
+            # Close both JSON arrays only after successful iteration.
+            output.write("\n]\n")
+            matched_output.write("\n]\n")
+
+        # Publish only fully written files.
         temporary_products_path.replace(products_path)
+        temporary_matched_path.replace(matched_products_path)
 
     finally:
         temporary_products_path.unlink(missing_ok=True)
+        temporary_matched_path.unlink(missing_ok=True)
 
     mapping: dict[str, dict] = {}
     matched_count = 0
@@ -429,6 +460,7 @@ def build_catalog(
     report = {
         "sales_item_count": total,
         "feed_offer_count": offer_count,
+        "matched_offer_count": matched_offer_count,
         "matched_item_count": matched_count,
         "multi_offer_item_count": multi_offer_count,
         "ambiguous_item_count": 0,

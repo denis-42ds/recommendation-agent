@@ -34,3 +34,6 @@ select = [
     "F",  # pyflakes
     "I",  # import sorting
 ]
+
+[tool.setuptools.packages.find]
+where = ["src"]
