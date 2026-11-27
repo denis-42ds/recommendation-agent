@@ -1,11 +1,11 @@
 # Architecture — Recommendation Agent MVP
 
 **Дата актуализации:** 27.11.2026
-**Статус:** DECISION — минимальная архитектура для завершения MVP.
+**Статус:** DECISION — локальная архитектура MVP реализована и проверена пользователем.
 
 ## 1. Архитектурный принцип
 
-Модульный монолит: один Python-процесс, Streamlit UI и локальные файлы данных. Архитектура должна позволить запустить демонстрацию без внешних сервисов и LLM.
+Модульный монолит: один Python-процесс, Streamlit UI, Recommendation Engine и загрузчик подготовленных данных. Локальная демонстрация не требует внешних сервисов или LLM.
 
 ## 2. Поток обработки
 
@@ -17,121 +17,139 @@ Customer Context
    |
    v
 Candidate Generation
-   |  - Co-purchase candidates
-   |  - Popularity fallback
+   |-- Co-purchase candidates from item graph
+   `-- Popularity fallback by segment
+   |
    v
 Business Filtering
-   |  - exclude purchased
-   |  - catalog membership
-   |  - segment constraints where supported
+   |-- exclude purchased product_group
+   |-- catalog membership / available offers
+   `-- one offer per product_group
+   |
    v
 Ranking / Scoring
    |
    v
-Explanation from evidence
+Evidence-based Explanation
    |
    v
-Top-3 recommendations
+Top-3 RecommendationResult
 ```
 
-## 3. Границы модулей
+## 3. Компоненты
 
-**UI**
-- выбор демонстрационного клиента;
-- показ сегмента и краткой истории;
-- запуск движка;
-- отображение рекомендаций, score, причин и evidence;
-- явное обозначение cold-start / fallback.
+### UI — `app.py`
+- выбор сегмента B2B/B2C;
+- выбор клиента с историей или cold-start;
+- отображение сегмента и истории;
+- вызов движка;
+- отображение рекомендаций, score, причин, evidence и объяснения;
+- переход к карточке предложения по URL, если он присутствует в каталоге.
 
-**Recommendation Engine**
-- принимает контекст клиента и доступные данные;
-- формирует кандидатов;
-- применяет фильтры;
-- ранжирует;
-- строит структурированный результат.
+Локальный запуск `streamlit run app.py` подтверждён пользователем. Публичный деплой не подтверждён.
 
-**Data access**
-- читает подготовленные JSON/CSV/артефакты;
-- не смешивает чтение файлов с алгоритмом ранжирования;
-- не модифицирует исходный датасет.
+### Recommendation Engine — `src/recommendation_agent/engine.py`
+- принимает историю `item_id`, сегмент и `k`;
+- получает co-purchase кандидатов из item-графа;
+- агрегирует кандидатов по товарной идентичности для выдачи;
+- исключает уже купленные группы;
+- использует co-purchase прежде popularity fallback;
+- выдаёт детерминированный `RecommendationResult`.
 
-**Existing analytics**
-- baseline/backtest и граф совместных покупок остаются отдельными артефактами;
-- не переписывать их ради UI;
-- повторно использовать готовые артефакты через адаптер/загрузчик, если их формат подходит.
+### Models — `src/recommendation_agent/models.py`
+`ProductOffer` содержит `item_id`, `product_group`, `offer_id`, `available`, `name`, `url`, `vendor`, `category_path`, `description`. Поля цены нет.
 
-## 4. Алгоритм MVP
+`Recommendation` содержит `product_id`, `recommendation_type`, `score`, `reason_codes`, `evidence`, `explanation`.
+
+`RecommendationResult` содержит `client_group`, `recommendations`, `personalized`, `fill_rate`.
+
+### Data access — `src/recommendation_agent/data_loader.py`
+- загружает workbook, graph JSON и `matched_products.json`;
+- строит adjacency и сегментную popularity;
+- формирует histories и client groups;
+- передаёт готовые структуры движку.
+
+Существующий baseline не переписывается ради UI.
+
+## 4. Идентичность товаров и уровни данных
+
+Это важное разграничение:
+
+| Контур | Идентификатор | Правило |
+|---|---|---|
+| Sales / baseline | `item_id` | Сохранять исходную детализацию |
+| Product graph | `item_id` | Узлы и рёбра остаются на уровне item |
+| Engine filtering/dedup | `product_group` | Исключить уже купленную группу и дубли в выдаче |
+| Catalog offer | `offer_id` | Конкретное предложение каталога |
+| Recommendation output | `product_id = offer_id` | Идентификатор разрешается в каталоге |
+
+Внутри одной `product_group` выбирается одно доступное предложение детерминированно по `(offer_id, item_id)`. Это не означает, что разные `item_id` объединяются в baseline или графе.
+
+## 5. Источники и ограничения данных
+
+- Sales workbook — история покупок.
+- `artifacts/product_graph/graph.json` — Train-граф: 813 узлов и 1 986 рёбер.
+- `artifacts/catalog/matched_products.json` — 552 сопоставленные записи предложений.
+- 438 из 817 sales `item_id` имеют сопоставление в последнем подтверждённом запуске каталога.
+- Только доступные предложения используются движком.
+- Исторического snapshot каталога/наличия нет.
+
+Не выводить техническую совместимость из совместной покупки. Не выводить цену: поле цены отсутствует в `ProductOffer`.
+
+## 6. Алгоритм
 
 ### Candidate Generation
-
-1. Получить уникальные `item_id` из истории клиента.
-2. Найти связанные товары в графе совместных покупок.
-3. Агрегировать факты по кандидатам: число совместных корзин, источники из истории.
-4. При недостатке кандидатов добавить popularity fallback из Train.
+1. Уникальная история клиента на уровне `item_id`.
+2. Соседи из неориентированного co-purchase графа.
+3. Суммирование `basket_count` по товарам истории.
+4. Popularity fallback по сегменту для незаполненных позиций.
 
 ### Business Filtering
+- фильтр ранее приобретённых `product_group`;
+- фильтр по доступному сопоставленному каталогу;
+- одна позиция на `product_group`;
+- B2B/B2C сегментная популярность;
+- для B2C не используются `industry` и корпоративный профиль.
 
-- исключить ранее купленные товары;
-- оставить только товары с подтверждённой записью в используемом каталоге;
-- исключить неоднозначные или некорректные сопоставления;
-- не делать вывод о технической совместимости только по co-purchase;
-- не использовать `industry` и корпоративный профиль для B2C.
+### Ranking / Explanation
+Ранжирование детерминированное: co-purchase приоритетнее fallback; evidence и reason codes формируются из реальных счётчиков и источников. LLM не входит в критический путь.
 
-### Ranking
+## 7. Результаты локальной диагностики
 
-Начать с простой воспроизводимой оценки. Конкретная формула должна соответствовать полям реально имеющихся артефактов. Не вводить веса и признаки, для которых нет данных.
+Пользователь подтвердил диагностический прогон по 19 008 клиентам:
+- Fill Rate 100% для ALL/B2B/B2C;
+- Top-3 заполнен всем клиентам;
+- 17 457 клиентов с историей и 1 551 без истории;
+- 40 468 co-purchase позиций;
+- 11 903 popularity fallback позиции;
+- 4 653 cold-start popularity позиции.
 
-Tie-break должен быть стабильным, например по score, числу совместных корзин и `product_id`.
+Эти значения описывают заполненность и состав выдачи, но не являются оценкой Precision или бизнес-эффекта.
 
-### Explanation
+## 8. Тестирование
 
-Формировать текст и коды причин детерминированно из `evidence`. LLM не входит в критический путь.
+Подтверждённый локальный результат:
+```text
+ruff check: All checks passed
+git diff --check: без ошибок
+pytest: 45 passed
+```
 
-## 5. Контракт результата
+Дополнительно пользователь запускал:
+```bash
+python -m scripts.check_recommendation_engine
+python -m scripts.evaluate_recommendation_engine
+streamlit run app.py
+```
 
-Каждая запись рекомендации содержит:
-- `product_id`;
-- `recommendation_type`;
-- `score`;
-- `reason_codes`;
-- `evidence`;
-- `explanation`.
+## 9. Развёртывание
 
-`product_id` обязан разрешаться в каталог. Все фактические утверждения в explanation должны быть проверяемы по evidence.
+- Локальный Streamlit — подтверждённый путь.
+- Docker — OPEN до подтверждения build/run.
+- Cloud Run — OPEN до подтверждения deploy и публичного smoke test.
+- Целевой регион Cloud Run: `asia-southeast3` (Bangkok).
+- Предварительные параметры ресурсов не считать подтверждёнными настройками до деплоя.
 
-## 6. Данные
+## 10. Архитектурные ограничения
 
-Существующие артефакты:
-- граф: `artifacts/product_graph` (последний подтверждённый build: 813 nodes, 1,986 edges);
-- каталог: результат `scripts/build_catalog.py` (последний подтверждённый build: 438 matched sales items из 817);
-- baseline/backtest: локальные результаты пользователя.
-
-Точные имена и схемы JSON/CSV перед интеграцией проверить в репозитории. Не предполагать структуру файлов по документации.
-
-## 7. Тестирование
-
-Проверять отдельно:
-- генерацию co-purchase кандидатов;
-- fallback;
-- исключение покупок;
-- каталог;
-- сегментацию B2B/B2C;
-- стабильность Top-3;
-- cold-start;
-- evidence/explanation;
-- end-to-end вызов из UI.
-
-## 8. Развёртывание
-
-Локальный Streamlit — обязательный путь. Docker и Cloud Run добавлять после локального end-to-end.
-
-Cloud Run:
-- регион `asia-southeast3`;
-- предварительное допущение: 1 vCPU, 1 GiB RAM, min instances 0, max instances 1;
-- публичный стенд проверять по фактическому URL и smoke test.
-
-ngrok остаётся резервным вариантом при проблемах с Cloud Run.
-
-## 9. Архитектурные ограничения
-
-Не добавлять FastAPI, БД, RAG, vector DB, микросервисы или multi-agent без конкретной блокирующей причины.
+Не добавлять FastAPI, внешнюю БД, RAG, vector DB, микросервисы или multi-agent без конкретной блокирующей причины.
