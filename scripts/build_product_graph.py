@@ -208,7 +208,7 @@ def main() -> None:
         "--input",
         type=Path,
         default=Path(
-            "docs/source-materials/Датасет_Рекомендации_ЛК_v4.xlsx"
+            "docs/source-materials/Датасет_Рекомендации_ЛК_v5.xlsx"
         ),
         help="Path to the organizer Excel workbook.",
     )
