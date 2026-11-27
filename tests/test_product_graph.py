@@ -27,8 +27,10 @@ def sales() -> pd.DataFrame:
             {"order_id": "O2", "order_week": "2026-08-17", "item_id": "C"},
             # Isolated product D.
             {"order_id": "O3", "order_week": "2026-08-31", "item_id": "D"},
-            # September 1 is Test, not Train.
-            {"order_id": "O4", "order_week": "2026-09-01", "item_id": "TEST_ONLY"},
+            # Gap between Train and Test.
+            {"order_id": "O4", "order_week": "2026-09-01", "item_id": "GAP_ONLY"},
+            # Test starts on September 7.
+            {"order_id": "O5", "order_week": "2026-09-07", "item_id": "TEST_ONLY"},
         ]
     )
 
