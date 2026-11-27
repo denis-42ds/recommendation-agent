@@ -312,55 +312,66 @@ def build_catalog(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     products_path = output_dir / "products.json"
+    temporary_products_path = products_path.with_suffix(".json.part")
 
     print("Streaming YML offers and writing products.json...")
     offer_count = 0
 
-    with products_path.open("w", encoding="utf-8") as output:
-        output.write("[\n")
+    try:
+        with temporary_products_path.open("w", encoding="utf-8") as output:
+            output.write("[\n")
 
-        for product in iter_feed(feed_path):
-            if offer_count:
-                output.write(",\n")
+            for product in iter_feed(feed_path):
+                if offer_count:
+                    output.write(",\n")
 
-            output.write(json.dumps(product, ensure_ascii=False))
-            offer_count += 1
+                output.write(json.dumps(product, ensure_ascii=False))
+                offer_count += 1
 
-            offer_id = product["offer_id"]
-            if not offer_id:
-                continue
+                offer_id = product["offer_id"]
+                if not offer_id:
+                    continue
 
-            # 1. Exact normalized vendorCode match has priority.
-            vendor_key = normalize(product["vendor_code"])
-            matched_item_ids = sku_to_items.get(vendor_key, [])
-
-            if matched_item_ids:
-                method = "vendorCode"
-            else:
-                # 2. Exact URL structure: <SKU>-<this offer's ID>.
-                slug = (
-                    urlsplit(product["url"]).path.rstrip("/").rsplit("/", 1)[-1]
-                    if product["url"]
-                    else ""
-                )
-                suffix = f"-{offer_id}"
-
-                if slug.endswith(suffix):
-                    url_sku_key = normalize(slug[: -len(suffix)])
-                    matched_item_ids = sku_to_items.get(url_sku_key, [])
-                else:
-                    matched_item_ids = []
+                # 1. Exact normalized vendorCode match has priority.
+                vendor_key = normalize(product["vendor_code"])
+                matched_item_ids = sku_to_items.get(vendor_key, [])
 
                 if matched_item_ids:
-                    method = "url_article"
+                    method = "vendorCode"
                 else:
-                    # 3. Name matching is reserved for N-* items.
-                    name_key = normalize(product["name"])
-                    matched_item_ids = name_to_items.get(name_key, [])
-                    method = "exact_name" if matched_item_ids else ""
+                    # 2. Exact URL structure: <SKU>-<this offer's ID>.
+                    slug = (
+                        urlsplit(product["url"]).path.rstrip("/").rsplit("/", 1)[-1]
+                        if product["url"]
+                        else ""
+                    )
+                    suffix = f"-{offer_id}"
 
-            for item_id in matched_item_ids:
-                candidates[item_id][offer_id] = method
+                    if slug.endswith(suffix):
+                        url_sku_key = normalize(slug[: -len(suffix)])
+                        matched_item_ids = sku_to_items.get(url_sku_key, [])
+                    else:
+                        matched_item_ids = []
+
+                    if matched_item_ids:
+                        method = "url_article"
+                    else:
+                        # 3. Name matching is reserved for N-* items.
+                        name_key = normalize(product["name"])
+                        matched_item_ids = name_to_items.get(name_key, [])
+                        method = "exact_name" if matched_item_ids else ""
+
+                for item_id in matched_item_ids:
+                    candidates[item_id][offer_id] = method
+
+            # Закрываем JSON-массив только после успешного завершения цикла.
+            output.write("\n]\n")
+
+        # Публикуем только полностью записанный файл.
+        temporary_products_path.replace(products_path)
+
+    finally:
+        temporary_products_path.unlink(missing_ok=True)
 
     mapping: dict[str, dict] = {}
     matched_count = 0
