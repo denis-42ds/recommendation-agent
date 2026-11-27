@@ -1,0 +1,39 @@
+# Git и CI
+.git
+.github
+
+# Python environments and caches
+.venv
+venv
+__pycache__
+**/__pycache__
+.pytest_cache
+.ruff_cache
+.mypy_cache
+*.py[cod]
+*.egg-info
+
+# Tests
+tests/
+
+# Scripts:
+scripts/*
+!scripts/run_baseline.py
+
+# Artifacts:
+artifacts/baseline/
+artifacts/evaluation/
+artifacts/catalog/*
+!artifacts/catalog/matched_products.json
+artifacts/product_graph/*
+!artifacts/product_graph/graph.json
+
+# Docs: 
+docs/architecture.md
+docs/decisions/
+docs/DEMO_SCRIPT.md
+docs/requirements.md
+docs/STATE.md
+docs/HANDOFF
+docs/source-materials/*
+!docs/source-materials/Датасет_Рекомендации_ЛК_v5.xlsx
