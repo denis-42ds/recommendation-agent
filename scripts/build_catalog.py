@@ -3,11 +3,10 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
-import re
 import shutil
 import urllib.request
 import xml.etree.ElementTree as ET
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -20,9 +19,15 @@ OUTPUT_DIR = Path("artifacts/catalog")
 
 
 def normalize(value: object) -> str:
+    """Normalize SKU/name: uppercase Unicode letters and digits only."""
     if value is None:
         return ""
-    return re.sub(r"[^A-Z0-9]", "", str(value).upper())
+
+    return "".join(
+        char
+        for char in str(value).upper()
+        if char.isalnum()
+    )
 
 
 def local_name(tag: str) -> str:
@@ -39,7 +44,6 @@ def child_text(element: ET.Element, name: str) -> str:
 def download_feed(url: str, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".part")
-
     request = urllib.request.Request(
         url,
         headers={"User-Agent": "RecommendationAgent-MVP/1.0"},
@@ -58,9 +62,13 @@ def download_feed(url: str, destination: Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
-
 def load_sales_items(workbook_path: Path) -> dict[str, dict]:
-    """Load unique item IDs and preserve conflicting source representations."""
+    """
+    Load one record per item_id.
+
+    Different names do not create ambiguity when all rows have the same
+    normalized SKU. For N-* items without SKU, normalized names are used.
+    """
     workbook = load_workbook(
         workbook_path,
         read_only=True,
@@ -83,7 +91,6 @@ def load_sales_items(workbook_path: Path) -> dict[str, dict]:
             )
 
         indexes = {name: headers.index(name) for name in required}
-
         representations: dict[str, set[tuple[str, str]]] = defaultdict(set)
 
         for row in rows:
@@ -93,36 +100,81 @@ def load_sales_items(workbook_path: Path) -> dict[str, dict]:
 
             sku = str(row[indexes["sku"]] or "").strip()
             item_name = str(row[indexes["item_name"]] or "").strip()
-
             representations[item_id].add((sku, item_name))
 
         items: dict[str, dict] = {}
 
         for item_id, variants in representations.items():
             sorted_variants = sorted(variants)
+            normalized_skus = {
+                normalize(sku)
+                for sku, _ in sorted_variants
+                if normalize(sku)
+            }
 
-            if len(sorted_variants) == 1:
-                sku, item_name = sorted_variants[0]
+            base = {
+                "item_id": item_id,
+                "source_variants": [
+                    {"sku": sku, "item_name": name}
+                    for sku, name in sorted_variants
+                ],
+            }
+
+            if len(normalized_skus) == 1:
+                # All non-empty SKUs are equivalent after normalization.
+                # Keep a deterministic original representation for reporting.
+                sku = next(
+                    sku
+                    for sku, _ in sorted_variants
+                    if normalize(sku)
+                )
+                item_name = next(
+                    (name for _, name in sorted_variants if name),
+                    "",
+                )
                 items[item_id] = {
-                    "item_id": item_id,
+                    **base,
                     "sku": sku,
                     "item_name": item_name,
+                    "sku_key": next(iter(normalized_skus)),
+                    "match_key_type": "sku",
                     "status": "ok",
                 }
-            else:
-                items[item_id] = {
-                    "item_id": item_id,
-                    "sku": "",
-                    "item_name": "",
-                    "status": "ambiguous_source",
-                    "source_variants": [
-                        {"sku": sku, "item_name": name}
-                        for sku, name in sorted_variants
-                    ],
+                continue
+
+            if not normalized_skus and item_id.startswith("N-"):
+                normalized_names = {
+                    normalize(name)
+                    for _, name in sorted_variants
+                    if normalize(name)
                 }
 
-        return items
+                if len(normalized_names) == 1:
+                    item_name = next(
+                        name
+                        for _, name in sorted_variants
+                        if normalize(name)
+                    )
+                    items[item_id] = {
+                        **base,
+                        "sku": "",
+                        "item_name": item_name,
+                        "sku_key": next(iter(normalized_names)),
+                        "match_key_type": "name",
+                        "status": "ok",
+                    }
+                    continue
 
+            items[item_id] = {
+                **base,
+                "sku": "",
+                "item_name": "",
+                "sku_key": "",
+                "match_key_type": "",
+                "status": "ambiguous_source",
+            }
+
+        return items
     finally:
         workbook.close()
 
@@ -174,7 +226,7 @@ def parse_offer(
 
 
 def iter_feed(feed_path: Path):
-    """Yield one offer at a time. The full XML tree is never retained."""
+    """Yield offers incrementally; do not retain the full XML tree."""
     categories: dict[str, dict[str, str]] = {}
 
     with gzip.open(feed_path, "rb") as source:
@@ -195,20 +247,24 @@ def iter_feed(feed_path: Path):
                 element.clear()
 
 
-def build_url_pattern(sku_keys: set[str]) -> re.Pattern | None:
-    if not sku_keys:
-        return None
+def url_article_match(url: str, offer_id: str, sku_key: str) -> bool:
+    """
+    Match only URLs shaped like <SKU>-<exact offer_id>.
 
-    alternatives = "|".join(
-        re.escape(key)
-        for key in sorted(sku_keys, key=len, reverse=True)
-    )
-    return re.compile(rf"^(?P<sku>{alternatives})(?P<suffix>[0-9]+)$")
+    The offer ID must be the exact final URL component suffix. This prevents
+    a numeric SKU from matching an unrelated numeric offer ID.
+    """
+    if not url or not offer_id or not sku_key:
+        return False
 
+    slug = urlsplit(url).path.rstrip("/").rsplit("/", 1)[-1]
+    suffix = f"-{offer_id}"
 
-def url_article_key(url: str) -> str:
-    path = urlsplit(url).path.rstrip("/")
-    return normalize(path.rsplit("/", 1)[-1]) if path else ""
+    if not slug.endswith(suffix):
+        return False
+
+    sku_part = slug[: -len(suffix)]
+    return normalize(sku_part) == sku_key
 
 
 def write_json(path: Path, data: object) -> None:
@@ -238,29 +294,21 @@ def build_catalog(
     sku_to_items: dict[str, list[str]] = defaultdict(list)
     name_to_items: dict[str, list[str]] = defaultdict(list)
 
-    ambiguous_source_ids = {
-        item_id
-        for item_id, item in sales_items.items()
-        if item["status"] == "ambiguous_source"
-    }
-    
     for item_id, item in sales_items.items():
         if item["status"] != "ok":
             continue
-    
-        sku_key = normalize(item["sku"])
 
-        if sku_key:
-            sku_to_items[sku_key].append(item_id)
+        key = item["sku_key"]
+        if not key:
+            continue
 
-        if item_id.startswith("N-"):
-            name_key = normalize(item["item_name"])
-            if name_key:
-                name_to_items[name_key].append(item_id)
+        if item["match_key_type"] == "sku":
+            sku_to_items[key].append(item_id)
+        elif item["match_key_type"] == "name":
+            name_to_items[key].append(item_id)
 
-    url_pattern = build_url_pattern(set(sku_to_items))
     candidates: dict[str, dict[str, str]] = defaultdict(dict)
-    methods: dict[str, int] = defaultdict(int)
+    methods: Counter[str] = Counter()
 
     output_dir.mkdir(parents=True, exist_ok=True)
     products_path = output_dir / "products.json"
@@ -278,94 +326,106 @@ def build_catalog(
             output.write(json.dumps(product, ensure_ascii=False))
             offer_count += 1
 
-            # Prefer exact vendorCode match.
+            offer_id = product["offer_id"]
+            if not offer_id:
+                continue
+
+            # 1. Exact normalized vendorCode match has priority.
             vendor_key = normalize(product["vendor_code"])
             matched_item_ids = sku_to_items.get(vendor_key, [])
 
             if matched_item_ids:
                 method = "vendorCode"
             else:
-                # URL article format: normalized SKU + numeric offer ID.
-                slug = url_article_key(product["url"])
-                url_match = url_pattern.fullmatch(slug) if url_pattern else None
+                # 2. Exact URL structure: <SKU>-<this offer's ID>.
+                slug = (
+                    urlsplit(product["url"]).path.rstrip("/").rsplit("/", 1)[-1]
+                    if product["url"]
+                    else ""
+                )
+                suffix = f"-{offer_id}"
 
-                if url_match:
-                    matched_item_ids = sku_to_items.get(
-                        url_match.group("sku"), []
-                    )
-                    method = "url_article"
+                if slug.endswith(suffix):
+                    url_sku_key = normalize(slug[: -len(suffix)])
+                    matched_item_ids = sku_to_items.get(url_sku_key, [])
                 else:
                     matched_item_ids = []
-                    method = ""
 
-            # Name matching is reserved for N-* items.
-            if not matched_item_ids:
-                name_key = normalize(product["name"])
-                matched_item_ids = name_to_items.get(name_key, [])
-                method = "exact_name" if matched_item_ids else ""
+                if matched_item_ids:
+                    method = "url_article"
+                else:
+                    # 3. Name matching is reserved for N-* items.
+                    name_key = normalize(product["name"])
+                    matched_item_ids = name_to_items.get(name_key, [])
+                    method = "exact_name" if matched_item_ids else ""
 
             for item_id in matched_item_ids:
-                offer_id = product["offer_id"]
-                if offer_id:
-                    candidates[item_id][offer_id] = method
-
-        output.write("\n]\n")
+                candidates[item_id][offer_id] = method
 
     mapping: dict[str, dict] = {}
+    matched_count = 0
+    multi_offer_count = 0
+    unmatched_count = 0
+    ambiguous_source_count = 0
 
-    for item_id in sales_items:
-        if item_id in ambiguous_source_ids:
+    for item_id, item in sales_items.items():
+        if item["status"] != "ok":
             mapping[item_id] = {
                 "status": "ambiguous_source",
-                "match_method": "conflicting_sales_rows",
-                "offer_id": None,
+                "match_method": "conflicting_match_keys",
+                "offer_ids": [],
+                "match_count": 0,
             }
-            methods["ambiguous_source"] += 1
+            ambiguous_source_count += 1
             continue
-    
-        matches = candidates.get(item_id, {})
 
-        if len(matches) == 1:
-            offer_id, method = next(iter(matches.items()))
-            # Availability is read from the product JSON by offer_id later.
+        item_candidates = candidates.get(item_id, {})
+        offer_ids = sorted(
+            item_candidates,
+            key=lambda value: (not value.isdigit(), int(value) if value.isdigit() else value),
+        )
+
+        if offer_ids:
+            item_methods = sorted(set(item_candidates.values()))
             mapping[item_id] = {
                 "status": "matched",
-                "match_method": method,
-                "offer_id": offer_id,
+                "match_method": (
+                    item_methods[0]
+                    if len(item_methods) == 1
+                    else "multiple_methods"
+                ),
+                "match_methods": item_methods,
+                "offer_ids": offer_ids,
+                "match_count": len(offer_ids),
             }
-            methods[method] += 1
-        elif len(matches) > 1:
-            mapping[item_id] = {
-                "status": "ambiguous",
-                "match_method": "multiple_offers",
-                "offer_id": None,
-            }
-            methods["ambiguous"] += 1
+            matched_count += 1
+            if len(offer_ids) > 1:
+                multi_offer_count += 1
+
+            for method in item_methods:
+                methods[method] += 1
         else:
             mapping[item_id] = {
                 "status": "unmatched",
                 "match_method": "no_match",
-                "offer_id": None,
+                "offer_ids": [],
+                "match_count": 0,
             }
+            unmatched_count += 1
             methods["unmatched"] += 1
 
-    matched_count = sum(
-        1 for value in mapping.values() if value["status"] == "matched"
-    )
-    ambiguous_count = sum(
-        1 for value in mapping.values() if value["status"] == "ambiguous"
-    )
     total = len(mapping)
-
     report = {
         "sales_item_count": total,
         "feed_offer_count": offer_count,
         "matched_item_count": matched_count,
-        "ambiguous_item_count": ambiguous_count,
-        "unmatched_item_count": total - matched_count - ambiguous_count,
+        "multi_offer_item_count": multi_offer_count,
+        "ambiguous_item_count": 0,
+        "ambiguous_source_count": ambiguous_source_count,
+        "unmatched_item_count": unmatched_count + ambiguous_source_count,
+        "unmatched_without_source_conflict_count": unmatched_count,
         "match_rate": round(matched_count / total, 4) if total else 0.0,
         "match_methods": dict(sorted(methods.items())),
-        "ambiguous_source_count": len(ambiguous_source_ids),
     }
 
     write_json(output_dir / "item_mapping.json", mapping)
