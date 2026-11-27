@@ -1,19 +1,23 @@
 # STATE — Recommendation Agent
 
 **Дата обновления:** 27.11.2026
-**Статус:** локальный MVP реализован и проверен пользователем; Docker и Cloud Run остаются OPEN.
+**Статус:** локальный MVP реализован; Docker build/run подтверждены; приложение развёрнуто в Google Cloud Run и доступно по публичному URL.
 
 ## 1. Цель
 
-Создать демонстрируемый Recommendation Agent для личного кабинета интернет-магазина Softline. Целевой продукт включает Cross-sell, Up-sell и Renewal; текущий MVP ограничен Cross-sell.
+Создать демонстрируемый Recommendation Agent для личного кабинета интернет-магазина Softline.
 
-Критерии локального MVP:
-1. Приложение запускается локально.
+Целевой продукт включает Cross-sell, Up-sell и Renewal; текущий MVP ограничен Cross-sell.
+
+Критерии MVP:
+
+1. Приложение запускается локально и в контейнере.
 2. Можно выбрать B2B/B2C и демонстрационного клиента, включая клиента без истории.
 3. Движок возвращает до трёх допустимых рекомендаций.
 4. Результат содержит `product_id`, `recommendation_type`, `score`, `reason_codes`, `evidence`, `explanation`.
 5. Товары принадлежат используемому каталогу; уже купленные товарные группы исключаются.
 6. Базовая логика работает без LLM.
+7. Приложение доступно через публичный Cloud Run URL.
 
 ## 2. Сводный статус
 
@@ -23,34 +27,33 @@
 | Cloud Run region | CONFIRMED | `asia-southeast3` (Bangkok) |
 | Baseline / backtest | DONE | Когорты и Popularity совпали с официальными |
 | Co-purchase comparison | PARTIALLY DONE | Известны расхождения, причина не установлена |
-| Catalog builder | DONE WITH LIMITATIONS | 817 sales item_id; 438 matched item_id; 379 unmatched |
+| Catalog builder | DONE WITH LIMITATIONS | 817 sales `item_id`; 438 matched; 379 unmatched |
 | Product graph | DONE | 813 nodes, 1 986 edges |
-| Recommendation Engine | DONE (локально) | Smoke и диагностический прогон выполнены пользователем |
+| Recommendation Engine | DONE | Smoke и диагностический прогон выполнены пользователем |
 | Automated checks | CONFIRMED | Ruff и diff check OK; 45 тестов прошли |
-| Streamlit UI | CONFIRMED (локально) | Пользователь сообщил, что интерфейс отображается и функции доступны |
-| Docker | OPEN | Нет подтверждённого build/run результата |
-| Cloud Run deployment | OPEN | Нет подтверждённого URL и публичного smoke test |
+| Streamlit UI | CONFIRMED | Локальный запуск и функции подтверждены |
+| Docker | CONFIRMED | Сборка и запуск контейнера подтверждены |
+| Cloud Run deployment | CONFIRMED | Сервис Ready, публичный URL доступен |
+| Cloud Run revision | CONFIRMED | `recommendation-agent-00002-j5w`, 100% traffic |
+| Cloud Run concurrency | CONFIRMED | 80 |
+| Desktop public smoke test | CONFIRMED | Пользователь подтвердил работу в браузере на компьютере |
+| Mobile public smoke test | DONE | Пользователь подтвердил работу на мобильном устройстве |
 
-Последний подтверждённый набор проверок:
+Последний известный результат тестов:
+
 ```text
 All checks passed!
-45 passed in 1.80s
+45 passed
 ```
-Отдельный последующий запуск тестов также завершился успешно: `45 passed in 1.65s`.
 
-Запуск UI подтверждён пользователем:
-```text
-Uvicorn server started on :::8501
-Local URL: http://localhost:8501
-Network URL: http://192.168.1.105:8501
-```
-Пользователь подтвердил, что интерфейс отображается и все обозначенные функции доступны.
+Пользователь подтвердил локальный запуск UI и доступность его функций.
 
 ## 3. Данные и артефакты
 
 ### Каталог
 
 Последний подтверждённый результат построения каталога:
+
 - `sales_item_count`: 817
 - `feed_offer_count`: 135 952
 - `matched_offer_count`: 552
@@ -65,6 +68,7 @@ Network URL: http://192.168.1.105:8501
 `matched_products.json` содержит 552 записи. В них 548 уникальных `offer_id`; 526 предложений доступны и 26 недоступны. Четыре `offer_id` встречаются у двух `item_id`.
 
 Ограничения:
+
 - Каталог сопоставлен не полностью.
 - Исторического snapshot наличия нет.
 - Не расширять исследование matching без конкретной блокирующей диагностики.
@@ -73,6 +77,7 @@ Network URL: http://192.168.1.105:8501
 ### Граф
 
 `artifacts/product_graph/graph.json`:
+
 - schema version 2;
 - Train end: `2026-08-31`;
 - 813 nodes;
@@ -84,7 +89,9 @@ Network URL: http://192.168.1.105:8501
 
 ### Особенность идентификаторов
 
-Два исходных `item_id` для Sobol-4 PCIe A7 FSTEC-NORNG-SP1Y отличаются NBSP и обычным пробелом, но имеют одинаковое нормализованное значение и `product_group=G42011`. Исходные `item_id` сохраняются в baseline и графе. В движке выдача дедуплицируется по `product_group`.
+Два исходных `item_id` для Sobol-4 PCIe A7 FSTEC-NORNG-SP1Y отличаются NBSP и обычным пробелом, но имеют одинаковое нормализованное значение и `product_group=G42011`.
+
+Исходные `item_id` сохраняются в baseline и графе. В движке выдача дедуплицируется по `product_group`.
 
 ## 4. Backtest — неизменяемый протокол
 
@@ -127,11 +134,13 @@ Network URL: http://192.168.1.105:8501
 | B | B2C | Popularity | 25 | 20.00% | 100.00% |
 
 **CONFIRMED:** размеры когорт совпали; Popularity совпадает с официальным результатом в рамках принятого округления.
+
 **OPEN:** Co-purchase расходится с результатами организаторов. Это требует отдельного анализа и не доказывает автоматически ошибку реализации. Не менять протокол ради совпадения метрик.
 
 ## 5. Recommendation Engine
 
 Реализованный локальный поток:
+
 1. История клиента передаётся как `item_id`.
 2. Co-purchase кандидаты извлекаются из графа.
 3. Источники кандидатов агрегируются.
@@ -148,6 +157,7 @@ Popularity движка агрегируется на уровне `product_grou
 ### Диагностика движка
 
 Подтверждённый пользователем прогон:
+
 - всего клиентов: 19 008;
 - с историей: 17 457;
 - без истории: 1 551;
@@ -159,6 +169,7 @@ Popularity движка агрегируется на уровне `product_grou
 - Top-3 заполнен у всех клиентов в этом прогоне.
 
 Состав 57 024 рекомендательных позиций:
+
 - co-purchase: 40 468;
 - popularity fallback: 11 903;
 - cold-start popularity: 4 653.
@@ -167,9 +178,10 @@ Popularity движка агрегируется на уровне `product_grou
 
 **Важно:** Fill Rate показывает заполненность слотов, а не релевантность рекомендаций. Эти цифры не доказывают рост конверсии или выручки.
 
-## 6. Проверки и запуск
+## 6. Проверки и локальный запуск
 
 Подтверждено пользователем:
+
 ```bash
 git diff --check
 ruff check
@@ -179,9 +191,101 @@ python -m scripts.evaluate_recommendation_engine
 streamlit run app.py
 ```
 
-Последний известный статус git в соответствующем запуске показывал незатреканные `app.py` и `scripts/evaluate_recommendation_engine.py`. Не считать файлы закоммиченными без актуального `git status`.
+Результат тестов: 45 passed.
 
-## 7. Решения и ограничения
+Docker build/run подтверждены:
+
+```bash
+docker build -t recommendation-agent:local .
+docker run --rm -p 8080:8080 recommendation-agent:local
+```
+
+Пользователь подтвердил отображение UI на `http://localhost:8080` и отсутствие ошибок приложения в терминале.
+
+Последний известный статус git в более раннем запуске показывал незатреканные `app.py` и `scripts/evaluate_recommendation_engine.py`. Не считать файлы закоммиченными без актуального `git status`.
+
+## 7. Cloud Run deployment
+
+### Подтверждённые параметры
+
+| Параметр | Значение |
+|---|---|
+| Google Cloud project | `recommendation-agent-demo` |
+| Cloud Run service | `recommendation-agent` |
+| Region | `asia-southeast3` (Bangkok) |
+| Public URL | https://recommendation-agent-ug7evithwa-eu.a.run.app |
+| Последняя подтверждённая revision | `recommendation-agent-00002-j5w` |
+| Traffic | 100% на `recommendation-agent-00002-j5w` |
+| Concurrency | 80 |
+| Artifact Registry repository | `recommendation-agent` |
+| Artifact Registry location | `asia-southeast3` |
+
+Container image:
+
+```text
+asia-southeast3-docker.pkg.dev/recommendation-agent-demo/recommendation-agent/recommendation-agent:v1
+```
+
+Подтверждённый digest:
+
+```text
+sha256:351ea0880a1ac64980991847f0a93fb8238e67a92bd237834e852d416486b909
+```
+
+### История изменения concurrency
+
+Первоначально concurrency была установлена в 1.
+
+На мобильном устройстве наблюдалась ошибка:
+
+```text
+TypeError: Failed to fetch dynamically imported module
+```
+
+В логах встречались успешные GET 200 и один GET 429.
+
+Пользователь выполнил:
+
+```bash
+gcloud run services update recommendation-agent \
+  --project=recommendation-agent-demo \
+  --region=asia-southeast3 \
+  --concurrency=80
+```
+
+Создана revision `recommendation-agent-00002-j5w`, на неё направлено 100% трафика.
+
+Пользователь сообщил, что проблемы, по-видимому, исчезли.
+
+### Команды проверки
+
+```bash
+gcloud config list
+```
+
+```bash
+gcloud run services describe recommendation-agent \
+  --project=recommendation-agent-demo \
+  --region=asia-southeast3
+```
+
+```bash
+gcloud run revisions list \
+  --service=recommendation-agent \
+  --project=recommendation-agent-demo \
+  --region=asia-southeast3
+```
+
+```bash
+gcloud run services logs read recommendation-agent \
+  --project=recommendation-agent-demo \
+  --region=asia-southeast3 \
+  --limit=100
+```
+
+CPU, memory, min/max instances и актуальные настройки autoscaling не зафиксированы: требуется сверить текущий вывод `describe`.
+
+## 8. Решения и ограничения
 
 - Cross-sell first; не расширять scope на Up-sell/Renewal.
 - Baseline и граф сохраняют `item_id`; движок дедуплицирует рекомендации по `product_group`.
@@ -191,19 +295,38 @@ streamlit run app.py
 - Co-purchase не является доказательством технической совместимости.
 - Не показывать цену: соответствующего поля в модели `ProductOffer` нет.
 - Исторические snapshots каталога и профилей отсутствуют.
-- Не публиковать исходный датасет и клиентские данные.
-- Cloud Run: регион `asia-southeast3`; конфигурация ресурсов остаётся предварительной до реального деплоя.
+- Каталог сопоставлен не полностью.
+- Не заявлять рост бизнес-метрик без эксперимента.
 
-## 8. Следующие действия
+### Публичная демонстрация данных
 
-1. Проверить актуальный `git status`, diff и состав файлов перед коммитом.
-2. Зафиксировать документацию и проверить локальные команды.
-3. Выполнить Docker build/run, если Docker входит в обязательный путь сдачи.
-4. Выполнить Cloud Run deploy в `asia-southeast3`, если нужен публичный стенд.
-5. Проверить публичный URL и сценарии B2B/B2C/cold-start.
-6. Подготовить демонстрацию только на разрешённых данных.
-7. Отдельно исследовать расхождения Co-purchase, не меняя backtest protocol.
+Секреты, ключи и `.env` не включать в репозиторий и Docker-образ.
 
-## 9. Правило достоверности
+## 9. Следующие действия
 
-`DONE/CONFIRMED` ставить только после локального результата или явного подтверждения пользователя. ChatGPT не запускает локальный код, тесты, backtest и расчёты. Все команды исполняет разработчик.
+### Перед сдачей
+
+1. Открыть публичный URL на компьютере и пройти полный сценарий демонстрации.
+2. Повторить smoke test на мобильном устройстве после изменения concurrency на 80.
+3. Проверить актуальную revision и 100% traffic через `gcloud run revisions list`.
+4. Проверить текущие CPU, memory, min/max instances через `gcloud run services describe`.
+5. Проверить Cloud Run logs на ошибки после контрольного прогона.
+6. Обновить и проверить `docs/SUBMISSION.md`.
+7. Получить фактический перечень лицензий прямых и транзитивных зависимостей.
+8. Проверить `git status`, `git diff --check` и состав публичного репозитория.
+9. Подготовить и записать трёхминутную демонстрацию.
+
+### После сдачи / при наличии времени
+
+1. Отдельно исследовать расхождения Co-purchase, не меняя backtest protocol.
+2. Рассмотреть фиксацию зависимостей lock-файлом.
+3. Оценить покрытие каталога только при наличии конкретной блокирующей проблемы.
+4. Планировать Up-sell/Renewal отдельно от текущего MVP.
+
+## 10. Правило достоверности
+
+`DONE/CONFIRMED` ставить только после локального результата или явного подтверждения пользователя.
+
+ChatGPT не запускает локальный код, тесты, backtest и расчёты. Все команды исполняет разработчик.
+
+При отсутствии подтверждения использовать `OPEN`, а не выдавать предположение за факт.
