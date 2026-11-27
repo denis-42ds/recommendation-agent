@@ -23,6 +23,7 @@ REQUIRED_SALES_COLUMNS = {
     "client_id",
     "order_week",
     "item_id",
+    "product_group",
 }
 
 REQUIRED_CLIENT_COLUMNS = {
@@ -73,6 +74,62 @@ def load_data(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     clients = clients.drop_duplicates(subset=["client_id"], keep="last")
 
     return sales, clients
+
+
+def build_product_group_mapping(
+    sales: pd.DataFrame,
+) -> dict[str, str]:
+    """
+    Build item_id -> product_group mapping from all sales rows.
+
+    Empty product_group falls back to item_id, matching the organizer baseline.
+    An item_id mapped to multiple product groups is treated as invalid data.
+    """
+    required = {"item_id", "product_group"}
+    missing = required - set(sales.columns)
+
+    if missing:
+        raise ValueError(
+            f"В листе 'Продажи' отсутствуют колонки: {sorted(missing)}"
+        )
+
+    mapping_data = sales[["item_id", "product_group"]].copy()
+
+    mapping_data["item_id"] = normalize_id(mapping_data["item_id"])
+    mapping_data["product_group"] = normalize_id(
+        mapping_data["product_group"]
+    )
+
+    mapping_data = mapping_data.dropna(subset=["item_id"]).copy()
+
+    mapping_data["product_group"] = mapping_data["product_group"].fillna(
+        mapping_data["item_id"]
+    )
+
+    mapping_data.loc[
+        mapping_data["product_group"].eq(""),
+        "product_group",
+    ] = mapping_data["item_id"]
+
+    groups_per_item = (
+        mapping_data.groupby("item_id")["product_group"]
+        .nunique()
+    )
+
+    ambiguous_items = groups_per_item[groups_per_item > 1].index.tolist()
+
+    if ambiguous_items:
+        examples = ambiguous_items[:10]
+        raise ValueError(
+            "Обнаружены item_id, связанные с несколькими product_group. "
+            f"Примеры: {examples}"
+        )
+
+    return (
+        mapping_data.drop_duplicates(subset=["item_id"])
+        .set_index("item_id")["product_group"]
+        .to_dict()
+    )
 
 
 def split_train_test(
@@ -259,6 +316,7 @@ def evaluate_predictions(
     popularity_ranking: list[str],
     cooccurrence_graph: dict[str, Counter[str]],
     popularity_counts: dict[str, int],
+    product_groups: dict[str, str],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Calculate per-client predictions and aggregate metrics."""
     prediction_rows = []
@@ -279,6 +337,7 @@ def evaluate_predictions(
 
         for method, recommendations in methods.items():
             hits = len(set(recommendations[:TOP_K]) & target_items)
+            hit_items = sorted(set(recommendations[:TOP_K]) & target_items)
 
             prediction_rows.append(
                 {
@@ -293,6 +352,7 @@ def evaluate_predictions(
                     "hits": hits,
                     "precision_at_3": hits / TOP_K,
                     "has_recommendation": bool(recommendations),
+                    "hit_items": "|".join(hit_items),
                 }
             )
 
@@ -324,6 +384,94 @@ def evaluate_predictions(
 
     metrics = pd.DataFrame(metric_rows)
     return predictions, metrics
+
+
+def build_hit_split_report(
+    predictions: pd.DataFrame,
+    histories: dict[str, set[str]],
+    product_groups: dict[str, str],
+) -> pd.DataFrame:
+    """
+    Split successful recommendations into variants and new product groups.
+
+    A hit is a variant if its product_group is already represented in
+    the client's training history. Otherwise, it is a new product group.
+    """
+    rows = []
+
+    for row in predictions.itertuples(index=False):
+        client_id = row.client_id
+        hit_items = (
+            set(row.hit_items.split("|"))
+            if row.hit_items
+            else set()
+        )
+
+        history = histories[client_id]
+        history_groups = {
+            product_groups[item]
+            for item in history
+        }
+
+        variant_hits = sum(
+            1
+            for item in hit_items
+            if product_groups[item] in history_groups
+        )
+
+        new_hits = len(hit_items) - variant_hits
+
+        rows.append(
+            {
+                "client_id": client_id,
+                "client_group": row.client_group,
+                "cohort": row.cohort,
+                "method": row.method,
+                "variant_hits": variant_hits,
+                "new_hits": new_hits,
+                "total_hits": len(hit_items),
+            }
+        )
+
+    details = pd.DataFrame(rows)
+
+    report_rows = []
+
+    for (cohort_name, method), method_df in details.groupby(
+        ["cohort", "method"]
+    ):
+        for segment in ("ALL", "B2B", "B2C"):
+            if segment == "ALL":
+                subset = method_df
+            else:
+                subset = method_df[
+                    method_df["client_group"] == segment
+                ]
+
+            if subset.empty:
+                continue
+
+            variant_hits = int(subset["variant_hits"].sum())
+            new_hits = int(subset["new_hits"].sum())
+            total_hits = variant_hits + new_hits
+
+            report_rows.append(
+                {
+                    "cohort": cohort_name,
+                    "segment": segment,
+                    "method": method,
+                    "variant_hits": variant_hits,
+                    "new_hits": new_hits,
+                    "total_hits": total_hits,
+                    "variant_share": (
+                        variant_hits / total_hits
+                        if total_hits
+                        else None
+                    ),
+                }
+            )
+
+    return pd.DataFrame(report_rows)
 
 
 def save_cohort_sizes(cohort: pd.DataFrame, output_dir: Path) -> pd.DataFrame:
@@ -478,7 +626,7 @@ def main() -> None:
     parser.add_argument(
         "--input",
         type=Path,
-        default=Path("docs/source-materials/Датасет_Рекомендации_ЛК_v4.xlsx"),
+        default=Path("docs/source-materials/Датасет_Рекомендации_ЛК_v5.xlsx"),
         help="Path to the organizer Excel workbook.",
     )
     parser.add_argument(
@@ -495,6 +643,7 @@ def main() -> None:
     args.output.mkdir(parents=True, exist_ok=True)
 
     sales, clients = load_data(args.input)
+    product_groups = build_product_group_mapping(sales)
     train, test = split_train_test(sales)
 
     histories = build_client_histories(train)
@@ -511,6 +660,18 @@ def main() -> None:
         popularity_ranking=popularity_ranking,
         cooccurrence_graph=cooccurrence_graph,
         popularity_counts=popularity_counts,
+        product_groups=product_groups,
+    )
+
+    hit_split = build_hit_split_report(
+        predictions=predictions,
+        histories=histories,
+        product_groups=product_groups,
+    )
+
+    hit_split.to_csv(
+        args.output / "hit_split.csv",
+        index=False,
     )
 
     sizes = save_cohort_sizes(cohort, args.output)
@@ -559,7 +720,25 @@ def main() -> None:
     print("\nCohort sizes:")
     print(sizes.sort_values(["cohort", "client_group"]).to_string(index=False))
 
+    print("\nHit split (variant / new product groups):")
+    print(
+        hit_split.sort_values(
+            ["cohort", "segment", "method"]
+        ).to_string(
+            index=False,
+            formatters={
+                "variant_share": (
+                    lambda value: (
+                        f"{value:.1%}" if pd.notna(value) else "N/A"
+                    )
+                )
+            },
+        )
+    )
+
+    print(f"\nProduct groups: {len(set(product_groups.values()))}")
+    print(f"Mapped items: {len(product_groups)}")
+
 
 if __name__ == "__main__":
     main()
-
